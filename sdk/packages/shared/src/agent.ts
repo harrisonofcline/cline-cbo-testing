@@ -240,6 +240,7 @@ export interface AgentModelRequest {
 	tools: readonly AgentToolDefinition[];
 	/** Provider-executed tools enabled for this model request. */
 	modelTools?: readonly import("./llms/model-tools").ModelTool[];
+	promptCache?: import("./llms/gateway").GatewayPromptCacheRequest;
 	signal?: AbortSignal;
 	options?: Record<string, unknown>;
 }
@@ -351,6 +352,14 @@ export type AgentModelEvent =
 	| {
 			type: "usage";
 			usage: Partial<AgentUsage>;
+	  }
+	| {
+			type: "provider-routing";
+			providerId: string;
+			sessionId?: string;
+			pinnedProvider?: string;
+			finalProvider?: string;
+			pinDrifted: boolean;
 	  }
 	| {
 			type: "finish";

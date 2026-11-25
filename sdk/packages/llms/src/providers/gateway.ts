@@ -7,6 +7,9 @@ import type {
 	GatewayModelDefinition,
 	GatewayModelHandleOptions,
 	GatewayModelSelection,
+	GatewayPromptCacheMode,
+	GatewayPromptCacheRequest,
+	GatewayPromptCacheTtl,
 	GatewayProviderRegistration,
 	GatewayStreamRequest,
 	ITelemetryService,
@@ -108,6 +111,87 @@ function mergeReasoningOptions(
 		: undefined;
 }
 
+const VALID_PROMPT_CACHE_MODES = new Set<GatewayPromptCacheMode>([
+	"auto",
+	"explicit",
+	"off",
+]);
+const VALID_PROMPT_CACHE_TTLS = new Set<GatewayPromptCacheTtl>([
+	"5m",
+	"30m",
+	"1h",
+	"12h",
+	"24h",
+]);
+
+function normalizePromptCacheRequest(
+	value: unknown,
+): GatewayPromptCacheRequest | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return undefined;
+	}
+	const input = value as Record<string, unknown>;
+	const mode =
+		typeof input.mode === "string" &&
+		VALID_PROMPT_CACHE_MODES.has(input.mode as GatewayPromptCacheMode)
+			? (input.mode as GatewayPromptCacheMode)
+			: undefined;
+	const ttl =
+		typeof input.ttl === "string" &&
+		VALID_PROMPT_CACHE_TTLS.has(input.ttl as GatewayPromptCacheTtl)
+			? (input.ttl as GatewayPromptCacheTtl)
+			: undefined;
+	const breakpointIndices = Array.isArray(input.breakpointIndices)
+		? input.breakpointIndices
+				.filter(
+					(v): v is number =>
+						typeof v === "number" && Number.isFinite(v) && v >= 0,
+				)
+				.map((v) => Math.trunc(v))
+		: undefined;
+	const cohortKey =
+		typeof input.cohortKey === "string" && input.cohortKey.trim()
+			? input.cohortKey.trim()
+			: undefined;
+	const isolationKey =
+		typeof input.isolationKey === "string" && input.isolationKey.trim()
+			? input.isolationKey.trim()
+			: undefined;
+	const allowedTools = Array.isArray(input.allowedTools)
+		? input.allowedTools
+				.filter((t): t is string => typeof t === "string" && Boolean(t.trim()))
+				.map((t) => t.trim())
+		: undefined;
+
+	const normalized: GatewayPromptCacheRequest = {
+		...(mode !== undefined ? { mode } : {}),
+		...(ttl !== undefined ? { ttl } : {}),
+		...(breakpointIndices !== undefined ? { breakpointIndices } : {}),
+		...(cohortKey !== undefined ? { cohortKey } : {}),
+		...(isolationKey !== undefined ? { isolationKey } : {}),
+		...(allowedTools !== undefined && allowedTools.length > 0
+			? { allowedTools }
+			: {}),
+	};
+	return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function mergePromptCacheOptions(
+	defaults: GatewayPromptCacheRequest | undefined,
+	direct: GatewayPromptCacheRequest | undefined,
+	optionOverride: GatewayPromptCacheRequest | undefined,
+): GatewayPromptCacheRequest | undefined {
+	if (!defaults && !direct && !optionOverride) {
+		return undefined;
+	}
+	const merged: GatewayPromptCacheRequest = {
+		...(defaults ?? {}),
+		...(direct ?? {}),
+		...(optionOverride ?? {}),
+	};
+	return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
 export interface Gateway {
 	registerProvider(registration: GatewayProviderRegistration): this;
 	configureProvider(
@@ -184,6 +268,11 @@ class GatewayModelAdapter implements AgentModel {
 				defaultReasoning,
 				legacyReasoning,
 				requestedReasoning,
+			),
+			promptCache: mergePromptCacheOptions(
+				normalizePromptCacheRequest(this.defaults?.promptCache),
+				normalizePromptCacheRequest(request.promptCache),
+				normalizePromptCacheRequest(request.options?.promptCache),
 			),
 			signal: request.signal ?? this.defaults?.signal,
 		});

@@ -112,15 +112,44 @@ export interface GatewayProviderRouting {
 
 export type GatewayStickySessionTransport = "json-body" | "header";
 
+export type GatewayPromptCacheMode = "auto" | "explicit" | "off";
+
+export type GatewayPromptCacheTtl = "5m" | "30m" | "1h" | "12h" | "24h";
+
+/**
+ * Provider-neutral prompt-cache controls on a gateway stream request.
+ * Providers translate supported fields to native wire syntax and ignore
+ * unsupported ones rather than emitting invalid parameters.
+ */
+export interface GatewayPromptCacheRequest {
+	mode?: GatewayPromptCacheMode;
+	ttl?: GatewayPromptCacheTtl;
+	breakpointIndices?: readonly number[];
+	/** Cohort/session affinity key overriding `metadata.sessionId` for replica-sticky caches. */
+	cohortKey?: string;
+	/** Tenant/project cache isolation key (e.g. Fireworks `x-prompt-cache-isolation-key`). */
+	isolationKey?: string;
+	/** Grammar-level tool allowlist applied without mutating `request.tools` (e.g. Fireworks `allowed_tools`). */
+	allowedTools?: readonly string[];
+}
+
+export interface GatewayStickySessionBinding {
+	transport: GatewayStickySessionTransport;
+	field: string;
+	metadataKey?: string;
+	source?: "cohortKey" | "isolationKey";
+}
+
 export interface GatewayStickySessionMetadata {
 	/**
 	 * Where the provider expects the sticky-session identifier on the wire.
 	 * `field` is a JSON body property for `json-body`, and an HTTP header name
 	 * for `header`.
 	 */
-	transport: GatewayStickySessionTransport;
-	field: string;
-	metadataKey: string;
+	transport?: GatewayStickySessionTransport;
+	field?: string;
+	metadataKey?: string;
+	bindings?: readonly GatewayStickySessionBinding[];
 }
 
 export interface GatewayProviderMetadata {
@@ -268,6 +297,7 @@ export interface GatewayStreamRequest {
 		 */
 		preferOff?: boolean;
 	};
+	promptCache?: GatewayPromptCacheRequest;
 	signal?: AbortSignal;
 }
 
@@ -302,6 +332,7 @@ export interface GatewayModelHandleOptions {
 		effort?: ReasoningEffort;
 		budgetTokens?: number;
 	};
+	promptCache?: GatewayPromptCacheRequest;
 	signal?: AbortSignal;
 }
 

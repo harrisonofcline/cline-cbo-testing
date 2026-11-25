@@ -91,21 +91,29 @@ export const ANTHROPIC_AND_QWEN_CACHE_ROUTING_METADATA =
 		promptCacheRoutes: [ANTHROPIC_COMPATIBLE_ROUTE, QWEN_PROMPT_CACHE_ROUTE],
 	});
 
+export function resolveAnthropicCacheTtl(
+	request: Pick<GatewayStreamRequest, "promptCache">,
+): "5m" | "1h" | undefined {
+	return request.promptCache?.ttl === "1h" ? "1h" : undefined;
+}
+
 export function createPromptCacheProviderOptions(
 	providerId: string,
 	includeAnthropic: boolean,
+	ttl?: "5m" | "1h",
 ) {
+	const cacheControl = createEphemeralCacheControl(ttl);
 	const providerOptions: Record<string, unknown> = {
-		openaiCompatible: createEphemeralCacheControl(),
-		[toProviderOptionsBucket(providerId)]: createEphemeralCacheControl(),
+		openaiCompatible: cacheControl,
+		[toProviderOptionsBucket(providerId)]: cacheControl,
 	};
 
 	const providerOptionsKey = toProviderOptionsKey(providerId);
 	if (providerOptionsKey !== toProviderOptionsBucket(providerId)) {
-		providerOptions[providerOptionsKey] = createEphemeralCacheControl();
+		providerOptions[providerOptionsKey] = cacheControl;
 	}
 	if (includeAnthropic) {
-		providerOptions.anthropic = createEphemeralCacheControl();
+		providerOptions.anthropic = cacheControl;
 	}
 
 	return providerOptions;
@@ -115,6 +123,7 @@ export function applyPromptCacheToLastTextPart(
 	message: Record<string, unknown> | undefined,
 	providerId: string,
 	includeAnthropic: boolean,
+	ttl?: "5m" | "1h",
 ): void {
 	if (!message) {
 		return;
@@ -129,6 +138,7 @@ export function applyPromptCacheToLastTextPart(
 				providerOptions: createPromptCacheProviderOptions(
 					providerId,
 					includeAnthropic,
+					ttl,
 				),
 			},
 		];
@@ -166,6 +176,7 @@ export function applyPromptCacheToLastTextPart(
 				providerOptions: createPromptCacheProviderOptions(
 					providerId,
 					includeAnthropic,
+					ttl,
 				),
 			};
 			if (needsFiller) {
@@ -180,6 +191,9 @@ export function shouldApplyPromptCache(
 	request: GatewayStreamRequest,
 	context: GatewayProviderContext,
 ): boolean {
+	if (request.promptCache?.mode === "off") {
+		return false;
+	}
 	return resolvePromptCacheRoute(request, context) !== undefined;
 }
 
@@ -187,6 +201,9 @@ function shouldApplyAnthropicCacheBucket(
 	request: GatewayStreamRequest,
 	context: GatewayProviderContext,
 ): boolean {
+	if (request.promptCache?.mode === "off") {
+		return false;
+	}
 	return (
 		resolvePromptCacheRoute(request, context)?.matcher ===
 		"anthropic-compatible"
@@ -397,7 +414,7 @@ export function buildAnthropicProviderOptions(
 		...(effort ? { effort } : {}),
 		...(thinking ? { thinking } : {}),
 		...(shouldApplyAnthropicCacheBucket(request, context)
-			? createEphemeralCacheControl()
+			? createEphemeralCacheControl(resolveAnthropicCacheTtl(request))
 			: {}),
 	};
 }

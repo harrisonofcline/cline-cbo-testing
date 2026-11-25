@@ -4,6 +4,7 @@ import type {
 } from "@cline/shared";
 import {
 	buildAnthropicCompatibleReasoningOptions,
+	resolveAnthropicCacheTtl,
 	resolveAnthropicReasoningRequestPolicy,
 	resolveReasoningRoute,
 	shouldApplyPromptCache,
@@ -55,7 +56,9 @@ export function buildCompatibleProviderOptions(options: {
 	const { request, context, target, suppressions } = options;
 	const hasPromptCacheRoute = shouldApplyPromptCache(request, context);
 	const reasoning = buildAnthropicCompatibleReasoningOptions(request, context);
-	const promptCache = hasPromptCacheRoute ? createEphemeralCacheControl() : {};
+	const promptCache = hasPromptCacheRoute
+		? createEphemeralCacheControl(resolveAnthropicCacheTtl(request))
+		: {};
 
 	return {
 		...(target === "openai-compatible" ? { strictJsonSchema: false } : {}),

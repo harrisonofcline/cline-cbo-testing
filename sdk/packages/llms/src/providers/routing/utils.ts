@@ -9,9 +9,12 @@ export function toProviderOptionsKey(providerId: string): string {
 	);
 }
 
-export function createEphemeralCacheControl() {
+export function createEphemeralCacheControl(ttl?: "5m" | "1h") {
 	return {
-		cache_control: { type: "ephemeral" as const },
+		cache_control:
+			ttl === "1h"
+				? ({ type: "ephemeral", ttl: "1h" } as const)
+				: ({ type: "ephemeral" } as const),
 	};
 }
 

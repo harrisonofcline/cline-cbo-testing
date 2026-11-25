@@ -651,4 +651,32 @@ describe("anthropic-compatible routing helpers", () => {
 			},
 		});
 	});
+
+	it("emits ttl='1h' on ephemeral cache_control and suppresses caching when mode='off'", () => {
+		const ctx = makeContext(
+			"claude-sonnet",
+			metadataWithRouting({
+				promptCacheRoutes: [{ matcher: "anthropic-compatible" }],
+			}),
+		);
+		expect(
+			shouldApplyPromptCache(
+				{
+					providerId: "anthropic",
+					modelId: "claude-sonnet-5-5",
+					messages: [],
+					promptCache: { mode: "off" },
+				},
+				ctx,
+			),
+		).toBe(false);
+
+		const msg = { content: [{ type: "text", text: "Hello" }] };
+		applyPromptCacheToLastTextPart(msg, "anthropic", true, "1h");
+		expect(msg.content[0]).toMatchObject({
+			providerOptions: {
+				anthropic: { cache_control: { type: "ephemeral", ttl: "1h" } },
+			},
+		});
+	});
 });

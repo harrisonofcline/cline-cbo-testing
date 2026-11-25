@@ -8,6 +8,8 @@ import {
 	isKimiK26Family as isKimiK26FamilyFact,
 	isMiniMaxM3Model,
 	isMoonshotKimiModelIdFallback,
+	isOpenAIExtendedRetentionModelId,
+	isOpenAIPaidCacheWriteModelId,
 	providerReasoningRouteMatches,
 	resolveModelFamily,
 } from "../model-facts";
@@ -536,6 +538,88 @@ const routedGlmReasoningRule: ProviderOptionRule = {
 		),
 };
 
+const openAiPromptCacheRule: ProviderOptionRule = {
+	id: "provider.openai.prompt-cache",
+	phase: "model-overlay",
+	description:
+		"Maps GatewayPromptCacheRequest to OpenAI prompt_cache_key, GPT-5.6+/6.x prompt_cache_options, and legacy 24h prompt_cache_retention.",
+	applies: (input) =>
+		Boolean(input.request.promptCache) &&
+		(input.target === "openai" ||
+			input.request.providerId === "openai" ||
+			input.request.providerId === "openai-native" ||
+			input.request.providerId === "openai-codex"),
+	build: (input) => {
+		const pc = input.request.promptCache;
+		if (!pc) return undefined;
+		const patch: Record<string, unknown> = {};
+		if (pc.cohortKey) {
+			patch.promptCacheKey = pc.cohortKey;
+			patch.prompt_cache_key = pc.cohortKey;
+		}
+		if (isOpenAIPaidCacheWriteModelId(input.request.modelId)) {
+			if (pc.mode === "off" || pc.mode === "explicit") {
+				patch.prompt_cache_options = { mode: "explicit" };
+			} else if (pc.ttl === "12h") {
+				patch.prompt_cache_retention = "12h";
+			}
+		} else if (
+			pc.ttl === "24h" &&
+			isOpenAIExtendedRetentionModelId(input.request.modelId)
+		) {
+			patch.promptCacheRetention = "24h";
+			patch.prompt_cache_retention = "24h";
+		}
+		return Object.keys(patch).length > 0 ? { openai: patch } : undefined;
+	},
+};
+
+const vercelGatewayCachingRule: ProviderOptionRule = {
+	id: "provider.vercel-ai-gateway.prompt-cache",
+	phase: "model-overlay",
+	description:
+		"Forwards explicit Vercel AI Gateway prompt caching controls (caching: 'auto') when promptCache is specified.",
+	applies: (input) =>
+		input.request.providerId === "vercel-ai-gateway" &&
+		Boolean(input.request.promptCache) &&
+		input.request.promptCache?.mode !== "off",
+	build: () => ({
+		gateway: { caching: "auto" },
+	}),
+};
+
+const fireworksAllowedToolsRule: ProviderOptionRule = {
+	id: "provider.fireworks.allowed-tools",
+	phase: "model-overlay",
+	description:
+		"Emits Fireworks grammar-level allowed_tools masking without mutating request.tools so the cached tool prefix stays intact.",
+	applies: (input) =>
+		input.request.providerId === "fireworks" &&
+		Boolean(input.request.promptCache?.allowedTools?.length),
+	build: (input) => {
+		const allowed = input.request.promptCache?.allowedTools;
+		if (!allowed?.length) return undefined;
+		const bucketOptions = {
+			tool_choice: {
+				type: "allowed_tools",
+				mode: "auto",
+				tools: allowed.map((name) => ({
+					type: "function",
+					function: { name },
+				})),
+			},
+		};
+		return {
+			...buildProviderAndAliasPatch({
+				providerId: input.request.providerId,
+				providerOptionsKey: input.providerOptionsKey,
+				bucketOptions,
+			}),
+			openaiCompatible: bucketOptions,
+		};
+	},
+};
+
 /**
  * The table is the provider/family behavior matrix. Adding a new exception
  * should mean adding a named rule here, not adding a branch in the composer.
@@ -565,6 +649,9 @@ export const PROVIDER_OPTION_RULES: ReadonlyArray<ProviderOptionRule> = [
 	miniMaxThinkingRule,
 	routedGlmReasoningRule,
 	togetherReasoningToggleRule,
+	openAiPromptCacheRule,
+	vercelGatewayCachingRule,
+	fireworksAllowedToolsRule,
 ];
 
 export function matchProviderOptionRules(
