@@ -177,6 +177,7 @@ const BUILTIN_COMPACTION_STRATEGIES = {
 			context,
 			providerConfig,
 			summarizer: compaction?.summarizer,
+			cacheSafeFork: compaction?.cacheSafeFork,
 			preserveRecentTokens: Math.min(
 				compaction?.preserveRecentTokens ?? DEFAULT_PRESERVE_RECENT_TOKENS,
 				context.budget.messages.targetTokens,
@@ -423,6 +424,9 @@ export function createContextCompactionPrepareTurn(
 			parentAgentId: context.parentAgentId,
 			iteration: context.iteration,
 			messages: context.messages,
+			apiMessages: context.apiMessages,
+			systemPrompt: context.systemPrompt,
+			tools: context.tools as CoreCompactionContext["tools"],
 			model: context.model,
 			mode: effectiveMode,
 			abortSignal: context.abortSignal,

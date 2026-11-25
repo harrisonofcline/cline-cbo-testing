@@ -24,9 +24,52 @@ import {
 	resolveSummarizerConfig,
 	serializeConversation,
 } from "./compaction-shared";
-import { generateSummary } from "./summary-generation";
+import {
+	generateCacheSafeForkSummary,
+	generateSummary,
+} from "./summary-generation";
 
 const MIN_AGENTIC_SUMMARY_INPUT_TOKENS = 1_024;
+const CACHE_SAFE_FORK_SUMMARY_PROMPT = `CONTEXT CHECKPOINT (do NOT call any tools — respond with plain text only):
+Summarize the conversation above into a concise, factual continuation note for resuming this coding session.
+Include:
+1. Goal and active constraints
+2. Completed work and verified facts
+3. Key file paths read/modified and decisions made
+4. Remaining work and exact next steps
+Do not invoke tools. Return only the continuation note.`;
+
+function canUseCacheSafeFork(options: {
+	cacheSafeFork?: boolean;
+	context: CoreCompactionContext;
+	providerConfig: ProviderConfig;
+	summarizerProviderConfig: ProviderConfig;
+}): boolean {
+	if (!options.cacheSafeFork) return false;
+	if (options.context.mode === "overflow_recovery") return false;
+	if (
+		!options.context.apiMessages?.length ||
+		typeof options.context.systemPrompt !== "string"
+	) {
+		return false;
+	}
+	if (
+		options.summarizerProviderConfig.providerId !==
+			options.providerConfig.providerId ||
+		options.summarizerProviderConfig.modelId !== options.providerConfig.modelId
+	) {
+		return false;
+	}
+	const overheadReserve = 2_048;
+	const maxInput = options.context.budget.request.maxInputTokens;
+	if (
+		maxInput > 0 &&
+		options.context.budget.request.inputTokens + overheadReserve > maxInput
+	) {
+		return false;
+	}
+	return true;
+}
 
 export function buildAgenticSummaryInputBudget(options: {
 	messages: CoreCompactionContext["messages"];
@@ -53,6 +96,7 @@ export async function runAgenticCompaction(options: {
 	context: CoreCompactionContext;
 	providerConfig: ProviderConfig;
 	summarizer?: CoreCompactionSummarizerConfig;
+	cacheSafeFork?: boolean;
 	preserveRecentTokens: number;
 	estimateMessageTokens: EstimateMessageTokens;
 	logger?: BasicLogger;
@@ -186,12 +230,61 @@ export async function runAgenticCompaction(options: {
 		maxInputTokens: options.context.budget.request.maxInputTokens,
 		triggerTokens: options.context.budget.request.triggerTokens,
 	});
-	const summaryResult = await generateSummary({
-		providerConfig: summarizerProviderConfig,
-		systemPrompt:
-			"Summarize the provided coding session into a concise continuation note with detailed next steps.",
-		request: summaryRequest,
-	});
+	let summaryResult: Awaited<ReturnType<typeof generateSummary>> | undefined;
+	if (
+		canUseCacheSafeFork({
+			cacheSafeFork: options.cacheSafeFork,
+			context: options.context,
+			providerConfig: options.providerConfig,
+			summarizerProviderConfig,
+		})
+	) {
+		try {
+			const forkResult = await generateCacheSafeForkSummary({
+				providerConfig: summarizerProviderConfig,
+				systemPrompt: options.context.systemPrompt as string,
+				tools: options.context.tools,
+				prefixMessages: options.context.apiMessages ?? [],
+				summaryPrompt: CACHE_SAFE_FORK_SUMMARY_PROMPT,
+				signal: options.context.abortSignal,
+			});
+			if (
+				!forkResult.failed &&
+				!forkResult.usedTools &&
+				forkResult.text.trim().length > 0
+			) {
+				summaryResult = forkResult;
+			} else {
+				options.logger?.debug(
+					"Cache-safe fork compaction fell back to cold summarizer",
+					{
+						failed: forkResult.failed,
+						usedTools: forkResult.usedTools,
+						outputChars: forkResult.text.length,
+					},
+				);
+			}
+		} catch (error) {
+			if (options.context.abortSignal?.aborted) {
+				throw error;
+			}
+			options.logger?.debug(
+				"Cache-safe fork compaction threw; falling back to cold summarizer",
+				{
+					errorMessage: error instanceof Error ? error.message : String(error),
+				},
+			);
+		}
+	}
+
+	if (!summaryResult) {
+		summaryResult = await generateSummary({
+			providerConfig: summarizerProviderConfig,
+			systemPrompt:
+				"Summarize the provided coding session into a concise continuation note with detailed next steps.",
+			request: summaryRequest,
+		});
+	}
 	options.logger?.debug("Generated compaction summary", {
 		outputChars: summaryResult.text.length,
 		reasoningChars: summaryResult.reasoningChars,

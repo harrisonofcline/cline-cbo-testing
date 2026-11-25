@@ -19,7 +19,10 @@ import {
 	resolveSummarizerConfig,
 	serializeMessage,
 } from "./compaction-shared";
-import { generateSummary } from "./summary-generation";
+import {
+	generateCacheSafeForkSummary,
+	generateSummary,
+} from "./summary-generation";
 
 const MAX_INPUT_TOKENS = 32_000;
 const MAX_OUTPUT_CHARS = 12_000;
@@ -54,6 +57,10 @@ export async function summarizeConversation(options: {
 	messages: MessageWithMetadata[];
 	config: ConnectionConfig;
 	signal?: AbortSignal;
+	cacheSafeFork?: boolean;
+	systemPrompt?: string;
+	tools?: import("@cline/shared").ToolDefinition[];
+	apiMessages?: MessageWithMetadata[];
 }): Promise<string> {
 	options.signal?.throwIfAborted();
 	const connection = resolveConnectionProviderConfig(options.config);
@@ -153,13 +160,45 @@ export async function summarizeConversation(options: {
 	}
 	try {
 		signal.throwIfAborted();
-		const result = await generateSummary({
-			providerConfig,
-			systemPrompt: SYSTEM_PROMPT,
-			request: REQUEST_PREFIX + conversation,
-			maxOutputChars: MAX_OUTPUT_CHARS,
-			signal,
-		});
+		let result: Awaited<ReturnType<typeof generateSummary>> | undefined;
+		if (
+			options.cacheSafeFork &&
+			options.apiMessages?.length &&
+			typeof options.systemPrompt === "string"
+		) {
+			try {
+				const forkResult = await generateCacheSafeForkSummary({
+					providerConfig,
+					systemPrompt: options.systemPrompt,
+					tools: options.tools,
+					prefixMessages: options.apiMessages,
+					summaryPrompt: `${SYSTEM_PROMPT}\n\nRespond with plain text only. Do not call any tools.`,
+					maxOutputChars: MAX_OUTPUT_CHARS,
+					signal,
+				});
+				if (
+					!forkResult.failed &&
+					!forkResult.incompleteReason &&
+					!forkResult.usedTools &&
+					forkResult.text.trim()
+				) {
+					result = forkResult;
+				}
+			} catch (error) {
+				if (signal.aborted) {
+					throw error;
+				}
+			}
+		}
+		if (!result) {
+			result = await generateSummary({
+				providerConfig,
+				systemPrompt: SYSTEM_PROMPT,
+				request: REQUEST_PREFIX + conversation,
+				maxOutputChars: MAX_OUTPUT_CHARS,
+				signal,
+			});
+		}
 		if (
 			result.failed ||
 			result.incompleteReason ||
