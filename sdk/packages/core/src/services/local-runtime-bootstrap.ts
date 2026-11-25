@@ -180,6 +180,7 @@ function resolveBootstrapSystemPrompt(
 		metadata: workspaceMetadata,
 		rules: config.rules,
 		mode: config.mode,
+		prefixStableModes: config.prefixStableModes,
 		providerId: config.providerId,
 		platform: process.platform || "unknown",
 	});

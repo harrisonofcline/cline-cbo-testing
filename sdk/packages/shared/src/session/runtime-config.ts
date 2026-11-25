@@ -54,6 +54,13 @@ export interface SessionPromptConfig {
 	systemPrompt?: string;
 	rules?: string;
 	maxIterations?: number;
+	/**
+	 * Keep the system prompt and tool declarations identical between Plan and Act
+	 * modes so toggling modes never invalidates the provider KV prompt cache.
+	 * Plan-mode write restrictions are enforced dynamically via the `beforeTool`
+	 * guard and `<user_input mode="...">` / `<mode_notice>` turn wrappers.
+	 */
+	prefixStableModes?: boolean;
 }
 
 export interface SessionWorkspaceConfig {

@@ -398,6 +398,15 @@ export {
 	updateMcpSettingsFileSync,
 } from "./extensions/mcp";
 export {
+	createPlanModeCommandGuardExtension,
+	createPlanModeGuardExtension,
+	findFileEditingCommand,
+	formatPlanModeBlockedCommandError,
+	PLAN_MODE_COMMAND_GUARD_EXTENSION_NAME,
+	PLAN_MODE_GUARD_EXTENSION_NAME,
+	type PlanModeCommandGuardOptions,
+} from "./extensions/tools";
+export {
 	type AgentTask,
 	AgentTeam,
 	AgentTeamsRuntime,

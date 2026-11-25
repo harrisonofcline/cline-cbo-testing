@@ -221,6 +221,8 @@ export interface AgentTool<TInput = unknown, TOutput = unknown>
 	successContext?: string;
 	/** Override the runtime execution mode. Adjacent parallel calls may overlap; sequential calls form ordering boundaries. */
 	executionMode?: "sequential" | "parallel";
+	/** Marks whether the tool is strictly read-only (safe to invoke in Plan mode without mutating state). */
+	readOnly?: boolean;
 	timeoutMs?: number;
 	retryable?: boolean;
 	maxRetries?: number;

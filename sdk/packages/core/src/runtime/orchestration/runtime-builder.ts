@@ -40,7 +40,10 @@ import {
 	ToolPresets,
 	type ToolRoutingRule,
 } from "../../extensions/tools";
-import { createPlanModeCommandGuardExtension } from "../../extensions/tools/command-guard-extension";
+import {
+	createPlanModeCommandGuardExtension,
+	createPlanModeGuardExtension,
+} from "../../extensions/tools/command-guard-extension";
 import {
 	AgentTeamsRuntime,
 	bootstrapAgentTeams,
@@ -550,6 +553,13 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			await userInstructionService.start().catch(() => {});
 		}
 
+		const usePrefixStableModes =
+			config.prefixStableModes === true && normalized.mode !== "yolo";
+		// In prefixStableModes, Plan and Act register the identical Act-mode tool
+		// set so toggling modes never invalidates the provider KV cache; dynamic
+		// beforeTool enforcement blocks edits/shell writes whenever mode is "plan".
+		const toolPresetMode = usePrefixStableModes ? "act" : normalized.mode;
+
 		const registerSkillsTool =
 			normalized.enableTools &&
 			rootSkillsEnabled &&
@@ -558,7 +568,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 			isSkillsToolEnabledForSession({
 				cwd: config.cwd,
 				providerId: config.providerId,
-				mode: normalized.mode,
+				mode: toolPresetMode,
 				modelId: config.modelId,
 				toolRoutingRules: config.toolRoutingRules,
 				toolPolicies: effectiveToolPolicies,
@@ -580,14 +590,20 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 		// commands before approval/execution. Registered as an extension so it
 		// rides the shared hook merge for the lead agent, host-provided
 		// run_commands replacements (e.g. the VS Code terminal tool), and
-		// delegated sub-agents alike. Mode switches rebuild the runtime, so
-		// the guard appears/disappears with the mode.
+		// delegated sub-agents alike. In prefixStableModes, the dynamic guard
+		// stays registered across Plan <-> Act switches and enforces both write
+		// tool blocking and shell denylist based on the live mode.
 		const planModeCommandGuard =
-			normalized.mode === "plan" && normalized.enableTools
-				? createPlanModeCommandGuardExtension({
+			normalized.enableTools && usePrefixStableModes
+				? createPlanModeGuardExtension({
 						telemetry: telemetry ?? config.telemetry,
+						getMode: () => config.mode,
 					})
-				: undefined;
+				: normalized.mode === "plan" && normalized.enableTools
+					? createPlanModeCommandGuardExtension({
+							telemetry: telemetry ?? config.telemetry,
+						})
+					: undefined;
 		const injectedExtensions = [
 			userInstructionPlugin,
 			planModeCommandGuard,
@@ -602,7 +618,7 @@ export class DefaultRuntimeBuilder implements RuntimeBuilder {
 				...createBuiltinToolsList(
 					config.cwd,
 					config.providerId,
-					normalized.mode,
+					toolPresetMode,
 					config.modelId,
 					config.toolRoutingRules,
 					effectiveToolPolicies,
