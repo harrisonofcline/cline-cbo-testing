@@ -9,6 +9,7 @@ import {
 	type BasicLogger,
 	captureSdkError,
 	createSessionId,
+	formatModeSwitchNotice,
 	type ITelemetryService,
 	isLikelyAuthError,
 	normalizeUserInput,
@@ -2414,10 +2415,23 @@ export class LocalRuntimeHost implements RuntimeHost {
 		);
 		emitMentionTelemetry(session.config.telemetry, enriched);
 
-		const prompt = formatModePrompt(
-			enriched.prompt,
-			input.mode ?? session.config.mode,
-		);
+		const effectiveMode = input.mode ?? session.config.mode;
+		let bodyPrompt = enriched.prompt;
+		if (
+			session.config.prefixStableModes === true &&
+			input.mode &&
+			(input.mode === "plan" || input.mode === "act") &&
+			(session.config.mode === "plan" || session.config.mode === "act") &&
+			input.mode !== session.config.mode
+		) {
+			const previousMode = session.config.mode;
+			session.config.mode = input.mode;
+			if (!bodyPrompt.includes("<mode_notice>")) {
+				bodyPrompt = `${formatModeSwitchNotice(previousMode, input.mode)}\n${bodyPrompt}`;
+			}
+		}
+
+		const prompt = formatModePrompt(bodyPrompt, effectiveMode);
 		const explicitUserFiles = this.resolveAbsoluteFilePaths(
 			session.config.cwd,
 			input.userFiles,

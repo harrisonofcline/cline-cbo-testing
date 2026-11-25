@@ -48,13 +48,52 @@ export function shouldApplyBedrockCachePoint(
 	request: GatewayStreamRequest,
 	context: GatewayProviderContext,
 ): boolean {
+	if (request.promptCache?.mode === "off") {
+		return false;
+	}
 	return resolveBedrockCachePointRoute(request, context) !== undefined;
 }
 
-export function createBedrockCachePointProviderOptions() {
+export function createBedrockCachePointProviderOptions(ttl?: "5m" | "1h") {
 	return {
-		bedrock: { cachePoint: { type: "default" as const } },
+		bedrock: {
+			cachePoint:
+				ttl === "1h"
+					? ({ type: "default", ttl: "1h" } as const)
+					: ({ type: "default" } as const),
+		},
 	};
+}
+
+const MAX_BEDROCK_CACHE_POINTS = 4;
+
+/**
+ * Attach Bedrock cache points at explicit message indices (deduped, sorted,
+ * capped at 4).
+ */
+export function applyBedrockCachePoints(
+	messages: Array<Record<string, unknown>>,
+	indices: readonly number[],
+	ttl?: "5m" | "1h",
+): void {
+	const valid = [
+		...new Set(
+			indices
+				.map((idx) => Math.trunc(idx))
+				.filter((idx) => idx >= 0 && idx < messages.length),
+		),
+	]
+		.sort((a, b) => a - b)
+		.slice(0, MAX_BEDROCK_CACHE_POINTS);
+	const marker = createBedrockCachePointProviderOptions(ttl);
+	for (const idx of valid) {
+		const message = messages[idx];
+		if (!message) continue;
+		message.providerOptions = {
+			...(message.providerOptions as Record<string, unknown> | undefined),
+			...marker,
+		};
+	}
 }
 
 /**
@@ -65,6 +104,7 @@ export function createBedrockCachePointProviderOptions() {
  */
 export function applyBedrockCachePointToLastUserMessage(
 	messages: Array<Record<string, unknown>>,
+	ttl?: "5m" | "1h",
 ): void {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const message = messages[i];
@@ -73,7 +113,7 @@ export function applyBedrockCachePointToLastUserMessage(
 		}
 		message.providerOptions = {
 			...(message.providerOptions as Record<string, unknown> | undefined),
-			...createBedrockCachePointProviderOptions(),
+			...createBedrockCachePointProviderOptions(ttl),
 		};
 		return;
 	}

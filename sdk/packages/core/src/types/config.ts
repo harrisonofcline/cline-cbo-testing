@@ -14,6 +14,7 @@ import type {
 	SessionExecutionConfig,
 	SessionPromptConfig,
 	SessionWorkspaceConfig,
+	ToolDefinition,
 } from "@cline/shared";
 import type { ToolRoutingRule } from "../extensions/tools/model-tool-routing";
 import type { TeamEvent } from "../extensions/tools/team";
@@ -106,6 +107,12 @@ export interface CoreCompactionContext {
 	 * or recovering turn is not blocked on a stalled compaction.
 	 */
 	abortSignal?: AbortSignal;
+	/** Exact API-projected messages from the active turn (`MessageBuilder.buildForApi`). */
+	apiMessages?: MessageWithMetadata[];
+	/** Exact system prompt of the active session (used by cache-safe fork compaction). */
+	systemPrompt?: string;
+	/** Exact tool definitions of the active session (used by cache-safe fork compaction). */
+	tools?: ToolDefinition[];
 }
 
 // Mirrors BudgetPolicyIntent in extensions/context/budget-projection/types.ts.
@@ -161,6 +168,14 @@ export interface CoreCompactionConfig {
 	strategy?: CoreCompactionStrategy;
 	preserveRecentTokens?: number;
 	summarizer?: CoreCompactionSummarizerConfig;
+	/**
+	 * When true, agentic compaction appends a summarization turn onto the active
+	 * session's exact `systemPrompt`, `tools`, and `apiMessages` prefix so the
+	 * provider reads the warm trunk from KV cache instead of re-prefilling a cold
+	 * flattened transcript. Automatically falls back to the cold summarizer when
+	 * ineligible or if the model attempts tool calls.
+	 */
+	cacheSafeFork?: boolean;
 	compact?: (
 		context: CoreCompactionContext,
 	) =>

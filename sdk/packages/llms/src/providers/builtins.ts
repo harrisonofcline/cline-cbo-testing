@@ -94,6 +94,26 @@ const OPENROUTER_STICKY_SESSION_METADATA: GatewayProviderMetadata = {
 	},
 };
 
+const VERCEL_GATEWAY_STICKY_SESSION_METADATA: GatewayProviderMetadata = {
+	stickySession: {
+		bindings: [
+			{ transport: "header", field: "x-session-id", metadataKey: "sessionId" },
+		],
+	},
+};
+
+const XAI_STICKY_SESSION_METADATA: GatewayProviderMetadata = {
+	stickySession: {
+		bindings: [
+			{
+				transport: "header",
+				field: "x-grok-conv-id",
+				metadataKey: "sessionId",
+			},
+		],
+	},
+};
+
 /**
  * Context window requested from Ollama when neither the resolved model nor
  * the user's configuration supplies one. Matches the pre-SDK-migration
@@ -746,8 +766,7 @@ const cline = createClineLikeSpec({
 	// A new user has no credits yet, so the offline default is the first free
 	// model. Core's resolveClineDefaultModelId prefers the live feed's first free.
 	defaultModelId:
-		GENERATED_CLINE_RECOMMENDED_MODELS.free?.[0]?.id ??
-		CLINE_DEFAULT_MODEL_ID,
+		GENERATED_CLINE_RECOMMENDED_MODELS.free?.[0]?.id ?? CLINE_DEFAULT_MODEL_ID,
 	defaults: {
 		options: {
 			onResponseError: async (response: Response) => {
@@ -843,6 +862,7 @@ const OPENAI_COMPATIBLE_SPEC_OVERRIDES: BuiltinSpecOverride[] = [
 		defaultModelId: "grok-4.20-0309-non-reasoning",
 		apiKeyEnv: ["XAI_API_KEY"],
 		defaults: { baseUrl: "https://api.x.ai/v1" },
+		metadata: XAI_STICKY_SESSION_METADATA,
 	},
 	{
 		id: "together",
@@ -916,7 +936,10 @@ const OPENAI_COMPATIBLE_SPEC_OVERRIDES: BuiltinSpecOverride[] = [
 		apiKeyEnv: ["AI_GATEWAY_API_KEY"],
 		modelsProviderId: "vercel-ai-gateway",
 		defaults: { baseUrl: "https://ai-gateway.vercel.sh/v1" },
-		metadata: ANTHROPIC_AND_QWEN_CACHE_ROUTING_METADATA,
+		metadata: {
+			...ANTHROPIC_AND_QWEN_CACHE_ROUTING_METADATA,
+			...VERCEL_GATEWAY_STICKY_SESSION_METADATA,
+		},
 	},
 	{
 		id: "v0",

@@ -7,8 +7,14 @@
 // Zod Utilities
 export { validateWithZod, zodToJsonSchema } from "@cline/shared";
 export {
+	findFileEditingCommand,
+	formatPlanModeBlockedCommandError,
+} from "./command-guard";
+export {
 	createPlanModeCommandGuardExtension,
+	createPlanModeGuardExtension,
 	PLAN_MODE_COMMAND_GUARD_EXTENSION_NAME,
+	PLAN_MODE_GUARD_EXTENSION_NAME,
 	type PlanModeCommandGuardOptions,
 } from "./command-guard-extension";
 // Constants

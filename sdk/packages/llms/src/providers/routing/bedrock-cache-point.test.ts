@@ -5,6 +5,7 @@ import type {
 } from "@cline/shared";
 import { describe, expect, it } from "vitest";
 import {
+	applyBedrockCachePoints,
 	applyBedrockCachePointToLastUserMessage,
 	BEDROCK_ROUTING_METADATA,
 	resolveBedrockCachePointRoute,
@@ -128,5 +129,27 @@ describe("applyBedrockCachePointToLastUserMessage", () => {
 		applyBedrockCachePointToLastUserMessage(messages);
 
 		expect(messages[0]).not.toHaveProperty("providerOptions");
+	});
+
+	it("supports 1h TTL, explicit breakpointIndices, and mode='off' opt-out", () => {
+		const offReq = {
+			...makeRequest("global.anthropic.claude-sonnet-4-6"),
+			promptCache: { mode: "off" as const },
+		};
+		expect(shouldApplyBedrockCachePoint(offReq, makeContext())).toBe(false);
+
+		const messages: Array<Record<string, unknown>> = [
+			{ role: "user", content: [{ type: "text", text: "m0" }] },
+			{ role: "assistant", content: [{ type: "text", text: "m1" }] },
+			{ role: "user", content: [{ type: "text", text: "m2" }] },
+		];
+		applyBedrockCachePoints(messages, [0, 2, 99], "1h");
+		expect(messages[0]?.providerOptions).toEqual({
+			bedrock: { cachePoint: { type: "default", ttl: "1h" } },
+		});
+		expect(messages[1]).not.toHaveProperty("providerOptions");
+		expect(messages[2]?.providerOptions).toEqual({
+			bedrock: { cachePoint: { type: "default", ttl: "1h" } },
+		});
 	});
 });

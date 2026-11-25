@@ -147,6 +147,11 @@ export interface ClineSystemPromptOptions
 	 * calling a tool that is not in its toolset.
 	 */
 	planModeSwitchTool?: boolean;
+	/**
+	 * When true, emit a single mode-invariant Plan/Act prompt so toggling between
+	 * Plan and Act never mutates the cached system prompt prefix.
+	 */
+	prefixStableModes?: boolean;
 }
 
 export function buildClineSystemPrompt(
@@ -162,6 +167,7 @@ export function buildClineSystemPrompt(
 		overridePrompt,
 		providerId,
 		planModeSwitchTool = true,
+		prefixStableModes = false,
 	} = options;
 	const workspaceRoot = options.workspaceRoot ?? options.rootPath ?? "";
 	const isCline = isClineProvider(providerId || "");
@@ -183,16 +189,25 @@ export function buildClineSystemPrompt(
 			? DEFAULT_CLINE_SYSTEM_PROMPTS.YOLO
 			: DEFAULT_CLINE_SYSTEM_PROMPTS.ACT;
 
+	const planSection = planModeSwitchTool
+		? PLAN_MODE_INSTRUCTIONS
+		: PLAN_MODE_INSTRUCTIONS_MANUAL_SWITCH;
+
 	// Keep mode semantics shared across hosts, but omit the plan/act workflow
 	// instructions in YOLO mode. Caller rules apply in every mode.
+	// When prefixStableModes is enabled, both plan and act emit the identical
+	// prompt so switching modes preserves the provider KV prefix cache; the
+	// <user_input mode="..."> attribute and beforeTool guard enforce plan mode.
 	const effectiveRules = [
 		rules,
 		mode === "yolo" ? undefined : MODE_TAG_INSTRUCTIONS,
-		mode === "plan"
-			? planModeSwitchTool
-				? PLAN_MODE_INSTRUCTIONS
-				: PLAN_MODE_INSTRUCTIONS_MANUAL_SWITCH
-			: undefined,
+		mode === "yolo"
+			? undefined
+			: prefixStableModes
+				? planSection
+				: mode === "plan"
+					? planSection
+					: undefined,
 	]
 		.filter(Boolean)
 		.join("\n\n");

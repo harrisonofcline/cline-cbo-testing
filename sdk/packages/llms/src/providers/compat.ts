@@ -595,6 +595,8 @@ function toApiStreamChunk(
 				thoughtsTokenCount: event.usage.reasoningTokenCount,
 				totalCost: event.usage.totalCost,
 			};
+		case "provider-routing":
+			return undefined;
 		case "finish":
 			return {
 				type: "done",

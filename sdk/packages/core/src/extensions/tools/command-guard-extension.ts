@@ -19,8 +19,11 @@ import type {
 	AgentBeforeToolContext,
 	AgentBeforeToolResult,
 	AgentExtension,
+	AgentMessage,
+	AgentMode,
 	ITelemetryService,
 } from "@cline/shared";
+import { parseUserInputMode } from "@cline/shared";
 import { capturePlanModeCommandBlocked } from "../../services/telemetry/core-events";
 import {
 	findFileEditingCommand,
@@ -32,16 +35,90 @@ import { normalizeRunCommandsInput } from "./helpers";
 export const PLAN_MODE_COMMAND_GUARD_EXTENSION_NAME =
 	"core.plan-mode-command-guard";
 
+export const PLAN_MODE_GUARD_EXTENSION_NAME = "core.plan-mode-guard";
+
+const PLAN_MODE_WRITE_TOOL_NAMES = new Set<string>([
+	DefaultToolNames.EDITOR,
+	DefaultToolNames.APPLY_PATCH,
+]);
+
+function inferActiveModeFromMessages(
+	messages: readonly AgentMessage[] | undefined,
+): AgentMode | undefined {
+	if (!messages) return undefined;
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (!msg || msg.role !== "user") continue;
+		const content = msg.content;
+		const text =
+			typeof content === "string"
+				? content
+				: Array.isArray(content)
+					? content
+							.map((part) =>
+								part && typeof part === "object" && part.type === "text"
+									? part.text
+									: "",
+							)
+							.join("\n")
+					: "";
+		const parsed = parseUserInputMode(text);
+		if (parsed) return parsed;
+	}
+	return undefined;
+}
+
 export interface PlanModeCommandGuardOptions {
 	telemetry?: ITelemetryService;
+	/**
+	 * Optional dynamic mode getter for `prefixStableModes` sessions where the
+	 * session stays alive across Plan <-> Act transitions without rebuilding
+	 * its tools or system prompt. When omitted and `blockWriteTools` is false,
+	 * the guard assumes it was registered specifically for a plan-mode runtime.
+	 */
+	getMode?: () => AgentMode | undefined;
+	/**
+	 * When true, also block non-read-only mutating tools (`editor`, `apply_patch`,
+	 * or any tool explicitly flagged `readOnly === false`) while active mode is
+	 * `"plan"`. Used by `prefixStableModes` where Act and Plan share one toolset.
+	 */
+	blockWriteTools?: boolean;
 }
 
 export function createPlanModeCommandGuardExtension(
 	options: PlanModeCommandGuardOptions = {},
 ): AgentExtension {
+	const isPlanModeActive = (context: AgentBeforeToolContext): boolean => {
+		if (options.getMode) {
+			const liveMode = options.getMode();
+			if (liveMode) return liveMode === "plan";
+		}
+		if (options.blockWriteTools) {
+			const msgMode = inferActiveModeFromMessages(context.snapshot.messages);
+			return msgMode === "plan";
+		}
+		return true;
+	};
+
 	const beforeTool = (
 		context: AgentBeforeToolContext,
 	): AgentBeforeToolResult | undefined => {
+		if (!isPlanModeActive(context)) {
+			return undefined;
+		}
+
+		if (options.blockWriteTools) {
+			const tool = context.tool as { name: string; readOnly?: boolean };
+			const isExplicitWriteTool =
+				PLAN_MODE_WRITE_TOOL_NAMES.has(tool.name) || tool.readOnly === false;
+			if (isExplicitWriteTool && tool.readOnly !== true) {
+				return {
+					skip: true,
+					reason: `Tool "${tool.name}" is disabled in Plan mode. Complete exploration and present your plan first; file edits happen in Act mode.`,
+				};
+			}
+		}
+
 		if (context.tool.name !== DefaultToolNames.RUN_COMMANDS) {
 			return undefined;
 		}
@@ -78,7 +155,9 @@ export function createPlanModeCommandGuardExtension(
 	};
 
 	return {
-		name: PLAN_MODE_COMMAND_GUARD_EXTENSION_NAME,
+		name: options.blockWriteTools
+			? PLAN_MODE_GUARD_EXTENSION_NAME
+			: PLAN_MODE_COMMAND_GUARD_EXTENSION_NAME,
 		manifest: {
 			capabilities: ["hooks"],
 		},
@@ -86,4 +165,19 @@ export function createPlanModeCommandGuardExtension(
 			beforeTool,
 		},
 	};
+}
+
+/**
+ * Dynamic Plan-mode guard for `prefixStableModes` sessions: keeps the full
+ * Act-mode tool schema registered (zero cache invalidation on mode switches)
+ * while dynamically rejecting mutating tools and file-editing shell commands
+ * whenever the active mode is `"plan"`.
+ */
+export function createPlanModeGuardExtension(
+	options: Omit<PlanModeCommandGuardOptions, "blockWriteTools"> = {},
+): AgentExtension {
+	return createPlanModeCommandGuardExtension({
+		...options,
+		blockWriteTools: true,
+	});
 }

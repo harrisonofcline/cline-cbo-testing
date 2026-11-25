@@ -274,6 +274,10 @@ export function isQwenModel(options: {
 const OPENAI_O_SERIES_MODEL_ID_PATTERN = /(^|[^a-z0-9])o[134](?=$|[^a-z0-9])/;
 const OPENAI_GPT5_AND_LATER_MODEL_ID_PATTERN =
 	/(^|[^a-z0-9])gpt-?[5-9](?=$|[^a-z0-9])/;
+const OPENAI_PAID_CACHE_WRITE_PATTERN =
+	/(^|[^a-z0-9])gpt-?(?:5[.-]6|6)(?=$|[^a-z0-9])/;
+const OPENAI_EXTENDED_RETENTION_PATTERN =
+	/(^|[^a-z0-9])gpt-?(?:4[.-]1|5(?:[.-][0-5])?)(?=$|[^a-z0-9])/;
 
 export function isOpenAIReasoningEraModelId(
 	modelId: string | undefined,
@@ -287,6 +291,25 @@ export function isOpenAIReasoningEraModelId(
 		OPENAI_O_SERIES_MODEL_ID_PATTERN.test(normalized) ||
 		OPENAI_GPT5_AND_LATER_MODEL_ID_PATTERN.test(normalized)
 	);
+}
+
+/** OpenAI GPT-5.6+ / GPT-6.x models that bill cache writes unless explicitly opted out. */
+export function isOpenAIPaidCacheWriteModelId(
+	modelId: string | undefined,
+): boolean {
+	const normalized = normalizeRoutingValue(modelId);
+	return normalized ? OPENAI_PAID_CACHE_WRITE_PATTERN.test(normalized) : false;
+}
+
+/** Legacy OpenAI models (`gpt-4.1`, `gpt-5`..`gpt-5.5`) supporting free 24h prompt cache retention. */
+export function isOpenAIExtendedRetentionModelId(
+	modelId: string | undefined,
+): boolean {
+	const normalized = normalizeRoutingValue(modelId);
+	if (!normalized || OPENAI_PAID_CACHE_WRITE_PATTERN.test(normalized)) {
+		return false;
+	}
+	return OPENAI_EXTENDED_RETENTION_PATTERN.test(normalized);
 }
 
 export function resolveGeminiThinkingMode(input: {

@@ -67,9 +67,11 @@ import {
 } from "./response-request-id";
 import {
 	applyPromptCacheToLastTextPart,
+	resolveAnthropicCacheTtl,
 	shouldApplyPromptCache,
 } from "./routing/anthropic-compatible";
 import {
+	applyBedrockCachePoints,
 	applyBedrockCachePointToLastUserMessage,
 	shouldApplyBedrockCachePoint,
 } from "./routing/bedrock-cache-point";
@@ -410,8 +412,16 @@ function buildAiSdkRequestMessages(
 				: undefined),
 	}) as Array<Record<string, unknown>>;
 
+	const cacheTtl = resolveAnthropicCacheTtl(request);
+	const cacheMode = request.promptCache?.mode;
+	const explicitBreakpoints = request.promptCache?.breakpointIndices;
+
 	if (shouldApplyBedrockCachePoint(request, context)) {
-		applyBedrockCachePointToLastUserMessage(aiMessages);
+		if (cacheMode === "explicit" && explicitBreakpoints) {
+			applyBedrockCachePoints(aiMessages, explicitBreakpoints, cacheTtl);
+		} else {
+			applyBedrockCachePointToLastUserMessage(aiMessages, cacheTtl);
+		}
 		return aiMessages;
 	}
 
@@ -424,12 +434,34 @@ function buildAiSdkRequestMessages(
 		family: resolveModelFamily(context),
 	});
 
+	if (cacheMode === "explicit" && explicitBreakpoints) {
+		const valid = [
+			...new Set(
+				explicitBreakpoints
+					.map((idx) => Math.trunc(idx))
+					.filter((idx) => idx >= 0 && idx < aiMessages.length),
+			),
+		]
+			.sort((a, b) => a - b)
+			.slice(0, 4);
+		for (const idx of valid) {
+			applyPromptCacheToLastTextPart(
+				aiMessages[idx],
+				request.providerId,
+				includeAnthropic,
+				cacheTtl,
+			);
+		}
+		return aiMessages;
+	}
+
 	for (let i = aiMessages.length - 1; i >= 0; i--) {
 		if (aiMessages[i]?.role === "user") {
 			applyPromptCacheToLastTextPart(
 				aiMessages[i],
 				request.providerId,
 				includeAnthropic,
+				cacheTtl,
 			);
 			break;
 		}
@@ -438,37 +470,91 @@ function buildAiSdkRequestMessages(
 	return aiMessages;
 }
 
-function resolveStickySession(
-	request: GatewayStreamRequest,
-	context: GatewayProviderContext,
-):
-	| {
+interface ResolvedStickyBinding {
+	transport: "json-body" | "header";
+	field: string;
+	value: string;
+}
+
+const PROVIDER_DEFAULT_STICKY_BINDINGS: Readonly<
+	Record<
+		string,
+		readonly {
 			transport: "json-body" | "header";
 			field: string;
-			value: string;
-	  }
-	| undefined {
+			metadataKey?: string;
+			source?: "cohortKey" | "isolationKey";
+		}[]
+	>
+> = {
+	fireworks: [
+		{
+			transport: "header",
+			field: "x-session-affinity",
+			metadataKey: "sessionId",
+		},
+		{
+			transport: "header",
+			field: "x-multi-turn-session-id",
+			metadataKey: "sessionId",
+		},
+		{
+			transport: "header",
+			field: "x-prompt-cache-isolation-key",
+			source: "isolationKey",
+		},
+	],
+	openrouter: [
+		{ transport: "json-body", field: "session_id", metadataKey: "sessionId" },
+		{ transport: "header", field: "x-session-id", metadataKey: "sessionId" },
+	],
+};
+
+function resolveStickySessionBindings(
+	request: GatewayStreamRequest,
+	context: GatewayProviderContext,
+): ResolvedStickyBinding[] {
 	const stickySession = context.provider.metadata?.stickySession;
-	if (!stickySession) {
-		return undefined;
+	const defaultBindings = PROVIDER_DEFAULT_STICKY_BINDINGS[request.providerId];
+	const specs = stickySession?.bindings?.length
+		? stickySession.bindings
+		: defaultBindings?.length
+			? defaultBindings
+			: stickySession?.transport && stickySession.field
+				? [
+						{
+							transport: stickySession.transport,
+							field: stickySession.field,
+							metadataKey: stickySession.metadataKey,
+						},
+					]
+				: [];
+	if (specs.length === 0) {
+		return [];
 	}
 	const metadata = request.metadata;
-	const value =
-		metadata && typeof metadata === "object"
-			? metadata[stickySession.metadataKey]
-			: undefined;
-	if (typeof value !== "string") {
-		return undefined;
+	const resolved: ResolvedStickyBinding[] = [];
+	for (const spec of specs) {
+		let raw: unknown;
+		if (spec.source === "isolationKey") {
+			raw = request.promptCache?.isolationKey;
+		} else {
+			raw =
+				request.promptCache?.cohortKey ??
+				(spec.metadataKey && metadata && typeof metadata === "object"
+					? metadata[spec.metadataKey]
+					: undefined);
+		}
+		if (typeof raw !== "string") continue;
+		const trimmed = raw.trim();
+		if (!trimmed) continue;
+		resolved.push({
+			transport: spec.transport,
+			field: spec.field,
+			value: trimmed,
+		});
 	}
-	const trimmed = value.trim();
-	if (!trimmed) {
-		return undefined;
-	}
-	return {
-		transport: stickySession.transport,
-		field: stickySession.field,
-		value: trimmed,
-	};
+	return resolved;
 }
 
 type FetchBodyText =
@@ -569,8 +655,8 @@ function wrapFetchForStickySession(
 	request: GatewayStreamRequest,
 	context: GatewayProviderContext,
 ): typeof fetch | undefined {
-	const stickySession = resolveStickySession(request, context);
-	if (!stickySession) {
+	const bindings = resolveStickySessionBindings(request, context);
+	if (bindings.length === 0) {
 		return baseFetch;
 	}
 	const delegate = baseFetch ?? globalThis.fetch;
@@ -578,10 +664,14 @@ function wrapFetchForStickySession(
 		return baseFetch;
 	}
 	const sessionFetch = (async (input, init) => {
-		const [nextInput, nextInit] =
-			stickySession.transport === "json-body"
-				? await injectJsonBodyStickySession(input, init, stickySession)
-				: injectHeaderStickySession(input, init, stickySession);
+		let nextInput = input;
+		let nextInit = init;
+		for (const binding of bindings) {
+			[nextInput, nextInit] =
+				binding.transport === "json-body"
+					? await injectJsonBodyStickySession(nextInput, nextInit, binding)
+					: injectHeaderStickySession(nextInput, nextInit, binding);
+		}
 		return delegate(nextInput, nextInit);
 	}) as typeof fetch;
 	const delegateWithPreconnect = delegate as typeof fetch & {
@@ -2045,6 +2135,42 @@ async function* emitAiSdkEvents(
 			type: "usage",
 			usage: normalizeUsage(usageToEmit, metadataToUse, pricingValue, request),
 		};
+	}
+
+	const gatewayMeta =
+		metadataToUse &&
+		typeof metadataToUse === "object" &&
+		"gateway" in metadataToUse
+			? (metadataToUse as { gateway?: unknown }).gateway
+			: undefined;
+	const routingMeta =
+		gatewayMeta && typeof gatewayMeta === "object" && "routing" in gatewayMeta
+			? (gatewayMeta as { routing?: unknown }).routing
+			: undefined;
+	if (routingMeta && typeof routingMeta === "object") {
+		const r = routingMeta as {
+			clientSessionId?: unknown;
+			finalProvider?: unknown;
+			affinity?: { pinnedProvider?: unknown } | null;
+		};
+		const pinnedProvider =
+			typeof r.affinity?.pinnedProvider === "string"
+				? r.affinity.pinnedProvider
+				: undefined;
+		const finalProvider =
+			typeof r.finalProvider === "string" ? r.finalProvider : undefined;
+		if (pinnedProvider && finalProvider && pinnedProvider !== finalProvider) {
+			yield {
+				type: "provider-routing",
+				providerId: request.providerId,
+				...(typeof r.clientSessionId === "string"
+					? { sessionId: r.clientSessionId }
+					: {}),
+				pinnedProvider,
+				finalProvider,
+				pinDrifted: true,
+			};
+		}
 	}
 
 	if (streamError) await reportError?.(streamError);
